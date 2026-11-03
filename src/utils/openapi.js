@@ -5,7 +5,8 @@ const toSchema = (schema) => {
     io: 'input',
     unrepresentable: 'any',
     override: ({ zodSchema, jsonSchema }) => {
-      if (zodSchema._zod.def.type === 'date') Object.assign(jsonSchema, { type: 'string', format: 'date-time' });
+      if (zodSchema._zod.def.type === 'date')
+        Object.assign(jsonSchema, { type: 'string', format: 'date-time' });
     },
   });
   return json;
@@ -16,7 +17,12 @@ const body = (schema) => ({
   content: { 'application/json': { schema: toSchema(schema) } },
 });
 
-const idParam = { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } };
+const idParam = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', format: 'uuid' },
+};
 
 const errors = {
   400: { description: 'Validation failed, invalid id or related record does not exist' },

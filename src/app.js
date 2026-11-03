@@ -1,4 +1,4 @@
-require("dotenv/config")
+require('dotenv/config');
 const express = require('express');
 const userRoutes = require('./routes/userRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
@@ -32,8 +32,7 @@ module.exports = app;
 const port = process.env.SERVER_PORT || 3000;
 
 if (require.main === module) {
-  prisma
-    .$queryRaw`SELECT 1`
+  prisma.$queryRaw`SELECT 1`
     .then(() => {
       console.log('Database connected');
       app.listen(port, () => console.log(`Listening on http://localhost:${port}`));

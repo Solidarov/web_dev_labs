@@ -26,7 +26,9 @@ module.exports = (model, include) => ({
   },
   update: async (req, res, next) => {
     try {
-      res.json(await prisma[model].update({ where: { id: req.params.id }, data: req.body, include }));
+      res.json(
+        await prisma[model].update({ where: { id: req.params.id }, data: req.body, include }),
+      );
     } catch (err) {
       next(err);
     }

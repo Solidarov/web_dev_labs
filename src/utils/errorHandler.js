@@ -4,7 +4,7 @@ const prismaErrors = {
   P2025: [404, 'Not found'],
 };
 
-module.exports = (err, req, res, next) => {
+module.exports = (err, req, res, _next) => {
   const known = prismaErrors[err.code];
   if (known) return res.status(known[0]).json({ error: known[1] });
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });

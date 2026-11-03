@@ -20,7 +20,9 @@ test('POST /users creates a user', async () => {
 });
 
 test('POST /bookings creates a booking', async () => {
-  const user = await prisma.user.create({ data: { email: `b-${unique()}@test.com`, name: 'Booker' } });
+  const user = await prisma.user.create({
+    data: { email: `b-${unique()}@test.com`, name: 'Booker' },
+  });
   const resource = await prisma.resource.create({ data: { name: 'Room 1' } });
   const res = await request(app).post('/bookings').send({
     userId: user.id,
@@ -78,5 +80,9 @@ test('GET /docs.json exposes the generated OpenAPI spec', async () => {
   assert.strictEqual(res.status, 200);
   assert.ok(res.body.paths['/users'].post.requestBody);
   assert.ok(res.body.paths['/bookings/{id}'].patch);
-  assert.strictEqual(res.body.paths['/bookings'].post.requestBody.content['application/json'].schema.properties.startTime.format, 'date-time');
+  assert.strictEqual(
+    res.body.paths['/bookings'].post.requestBody.content['application/json'].schema.properties
+      .startTime.format,
+    'date-time',
+  );
 });
