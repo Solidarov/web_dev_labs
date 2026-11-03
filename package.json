@@ -12,7 +12,10 @@
     "predev": "node scripts/prepareDb.js",
     "pretest": "node scripts/prepareDb.js test",
     "posttest": "docker compose stop test_db",
-    "db:stop": "docker compose stop"
+    "db:stop": "docker compose stop",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "keywords": [],
   "author": "",
@@ -28,6 +31,11 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.14.0",
+    "prettier": "^3.9.10",
     "prisma": "^7.10.1",
     "supertest": "^7.3.1"
   }
