@@ -1,3 +1,4 @@
+require("dotenv/config")
 const express = require('express');
 const userRoutes = require('./routes/userRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
@@ -28,12 +29,14 @@ app.use(errorHandler);
 
 module.exports = app;
 
+const port = process.env.SERVER_PORT || 3000;
+
 if (require.main === module) {
   prisma
     .$queryRaw`SELECT 1`
     .then(() => {
       console.log('Database connected');
-      app.listen(3000, () => console.log('Listening on http://localhost:3000'));
+      app.listen(port, () => console.log(`Listening on http://localhost:${port}`));
     })
     .catch((err) => {
       console.error('Database connection failed:', err.message);

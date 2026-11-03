@@ -1,4 +1,3 @@
-process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 require('dotenv/config');
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 
