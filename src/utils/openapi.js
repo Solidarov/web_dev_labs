@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const authSchemas = require('../models/auth');
 
 const toSchema = (schema) => {
   const { $schema, ...json } = z.toJSONSchema(schema, {
@@ -26,6 +27,7 @@ const idParam = {
 
 const errors = {
   400: { description: 'Validation failed, invalid id or related record does not exist' },
+  401: { description: 'Unauthorized or invalid credentials' },
   404: { description: 'Not found' },
   409: { description: 'Already exists' },
   500: { description: 'Internal server error' },
@@ -75,5 +77,53 @@ module.exports = (resources) => {
     };
   }
 
-  return { openapi: '3.0.3', info: { title: 'Booking API', version: '1.0.0' }, paths };
+  const auth = (summary, schema, codes, secured) => ({
+    tags: ['auth'],
+    summary,
+    ...(secured && { security: [{ bearerAuth: [] }] }),
+    ...(schema && { requestBody: body(schema) }),
+    responses: { ...codes, ...pick(...(schema ? [400] : []), 500) },
+  });
+
+  paths['/auth/register'] = {
+    post: auth('Register a new user', authSchemas.register, {
+      201: { description: 'Created, returns user and tokens' },
+      ...pick(409),
+    }),
+  };
+  paths['/auth/login'] = {
+    post: auth('Log in', authSchemas.login, {
+      200: { description: 'OK, returns user and tokens' },
+      ...pick(401),
+    }),
+  };
+  paths['/auth/refresh'] = {
+    post: auth('Rotate refresh token', authSchemas.refresh, {
+      200: { description: 'OK, returns new tokens' },
+      ...pick(401),
+    }),
+  };
+  paths['/auth/logout'] = {
+    post: auth('Revoke refresh token', authSchemas.refresh, { 204: { description: 'Logged out' } }),
+  };
+  paths['/auth/me'] = {
+    get: auth('Get current user', null, { 200: { description: 'OK' }, ...pick(401, 404) }, true),
+  };
+  paths['/auth/password'] = {
+    patch: auth(
+      'Change password',
+      authSchemas.changePassword,
+      { 200: { description: 'Password changed' }, ...pick(401, 404) },
+      true,
+    ),
+  };
+
+  return {
+    openapi: '3.0.3',
+    info: { title: 'Booking API', version: '1.0.0' },
+    components: {
+      securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } },
+    },
+    paths,
+  };
 };

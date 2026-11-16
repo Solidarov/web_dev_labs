@@ -4,6 +4,7 @@ const userRoutes = require('./routes/userRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const resourceRoutes = require('./routes/resourceRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
+const authRoutes = require('./routes/authRoutes');
 const swaggerUi = require('swagger-ui-express');
 const buildSpec = require('./utils/openapi');
 const errorHandler = require('./utils/errorHandler');
@@ -20,6 +21,7 @@ const resources = {
 };
 
 Object.entries(resources).forEach(([name, router]) => app.use(`/${name}`, router));
+app.use('/auth', authRoutes);
 
 const spec = buildSpec(resources);
 app.get('/docs.json', (req, res) => res.json(spec));

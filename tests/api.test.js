@@ -1,11 +1,14 @@
 require('dotenv/config');
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+process.env.JWT_SECRET ??= 'test-secret';
 
 const { test, after } = require('node:test');
 const assert = require('node:assert');
 const request = require('supertest');
+const express = require('express');
 const app = require('../src/app');
 const prisma = require('../src/utils/prisma');
+const { authenticate, authorize, signAccessToken } = require('../src/utils/auth');
 
 after(() => prisma.$disconnect());
 
@@ -85,4 +88,117 @@ test('GET /docs.json exposes the generated OpenAPI spec', async () => {
       .startTime.format,
     'date-time',
   );
+});
+
+const register = (overrides = {}) =>
+  request(app)
+    .post('/auth/register')
+    .send({ email: `a-${unique()}@test.com`, name: 'Auth', password: 'password123', ...overrides });
+
+test('POST /auth/register creates a user with tokens, ignores role, hides password', async () => {
+  const res = await register({ role: 'admin' });
+  assert.strictEqual(res.status, 201);
+  assert.strictEqual(res.body.user.role, 'user');
+  assert.strictEqual(res.body.user.password, undefined);
+  assert.ok(res.body.accessToken && res.body.refreshToken);
+
+  const dup = await register({ email: res.body.user.email });
+  assert.strictEqual(dup.status, 409);
+  assert.strictEqual((await register({ password: 'short' })).status, 400);
+  assert.strictEqual((await register({ email: 'not-an-email' })).status, 400);
+});
+
+test('POST /auth/login returns tokens or 401 on bad credentials', async () => {
+  const { email } = (await register()).body.user;
+  const ok = await request(app).post('/auth/login').send({ email, password: 'password123' });
+  assert.strictEqual(ok.status, 200);
+  assert.strictEqual(ok.body.user.password, undefined);
+  assert.ok(ok.body.accessToken && ok.body.refreshToken);
+
+  const bad = await request(app).post('/auth/login').send({ email, password: 'wrongpass1' });
+  assert.strictEqual(bad.status, 401);
+  assert.deepStrictEqual(bad.body, { error: 'Invalid credentials' });
+  const unknown = await request(app)
+    .post('/auth/login')
+    .send({ email: `none-${unique()}@test.com`, password: 'password123' });
+  assert.strictEqual(unknown.status, 401);
+});
+
+test('GET /auth/me requires a valid bearer token', async () => {
+  const { user, accessToken } = (await register()).body;
+  const me = await request(app).get('/auth/me').set('Authorization', `Bearer ${accessToken}`);
+  assert.strictEqual(me.status, 200);
+  assert.strictEqual(me.body.id, user.id);
+  assert.strictEqual(me.body.password, undefined);
+
+  assert.strictEqual((await request(app).get('/auth/me')).status, 401);
+  const garbage = await request(app).get('/auth/me').set('Authorization', 'Bearer garbage');
+  assert.strictEqual(garbage.status, 401);
+  assert.deepStrictEqual(garbage.body, { error: 'Unauthorized' });
+});
+
+test('POST /auth/refresh rotates tokens and rejects reuse', async () => {
+  const { refreshToken } = (await register()).body;
+  const first = await request(app).post('/auth/refresh').send({ refreshToken });
+  assert.strictEqual(first.status, 200);
+  assert.ok(first.body.accessToken);
+  assert.notStrictEqual(first.body.refreshToken, refreshToken);
+
+  const reused = await request(app).post('/auth/refresh').send({ refreshToken });
+  assert.strictEqual(reused.status, 401);
+  assert.deepStrictEqual(reused.body, { error: 'Invalid refresh token' });
+  const next = await request(app)
+    .post('/auth/refresh')
+    .send({ refreshToken: first.body.refreshToken });
+  assert.strictEqual(next.status, 200);
+});
+
+test('POST /auth/logout revokes the refresh token', async () => {
+  const { refreshToken } = (await register()).body;
+  assert.strictEqual((await request(app).post('/auth/logout').send({ refreshToken })).status, 204);
+  assert.strictEqual((await request(app).post('/auth/refresh').send({ refreshToken })).status, 401);
+  const unknown = await request(app).post('/auth/logout').send({ refreshToken: 'unknown' });
+  assert.strictEqual(unknown.status, 204);
+});
+
+test('PATCH /auth/password checks current password and revokes refresh tokens', async () => {
+  const { user, accessToken, refreshToken } = (await register()).body;
+  const auth = `Bearer ${accessToken}`;
+  const wrong = await request(app)
+    .patch('/auth/password')
+    .set('Authorization', auth)
+    .send({ currentPassword: 'wrongpass1', newPassword: 'newpassword1' });
+  assert.strictEqual(wrong.status, 401);
+
+  const ok = await request(app)
+    .patch('/auth/password')
+    .set('Authorization', auth)
+    .send({ currentPassword: 'password123', newPassword: 'newpassword1' });
+  assert.strictEqual(ok.status, 200);
+  assert.deepStrictEqual(ok.body, { message: 'Password changed' });
+
+  const login = await request(app)
+    .post('/auth/login')
+    .send({ email: user.email, password: 'newpassword1' });
+  assert.strictEqual(login.status, 200);
+  assert.strictEqual((await request(app).post('/auth/refresh').send({ refreshToken })).status, 401);
+});
+
+test('authorize returns 403 when the role is not allowed', async () => {
+  const mini = express();
+  mini.get('/admin', authenticate, authorize('admin'), (req, res) => res.json({ ok: true }));
+  const userToken = signAccessToken({ id: 'u1', role: 'user' });
+  const adminToken = signAccessToken({ id: 'a1', role: 'admin' });
+  const denied = await request(mini).get('/admin').set('Authorization', `Bearer ${userToken}`);
+  assert.strictEqual(denied.status, 403);
+  assert.deepStrictEqual(denied.body, { error: 'Forbidden' });
+  const allowed = await request(mini).get('/admin').set('Authorization', `Bearer ${adminToken}`);
+  assert.strictEqual(allowed.status, 200);
+});
+
+test('GET /docs.json documents auth routes with bearer security', async () => {
+  const res = await request(app).get('/docs.json');
+  assert.ok(res.body.components.securitySchemes.bearerAuth);
+  assert.ok(res.body.paths['/auth/register'].post.requestBody);
+  assert.ok(res.body.paths['/auth/me'].get.security);
 });
