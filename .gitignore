@@ -7,3 +7,5 @@ node_modules/
 # Lab report, templates and tasks (downloaded, not versioned)
 /reports/templates/
 lab_tasks/
+# Uploaded files
+uploads/

@@ -4,4 +4,4 @@ const { PrismaClient } = require('../generated/prisma');
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 
-module.exports = new PrismaClient({ adapter });
+module.exports = new PrismaClient({ adapter, omit: { user: { password: true } } });

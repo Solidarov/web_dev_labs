@@ -11,11 +11,15 @@ model User {
   id            String         @id @default(uuid()) @db.Uuid
   email         String         @unique
   name          String
+  password      String?
   role          String         @default("user")
   metadata      Json?          @db.JsonB
+  createdAt     DateTime       @default(now())
   profile       Profile?
   bookings      Booking[]
   notifications Notification[]
+  authTokens    AuthToken[]
+  actionLogs    ActionLog[]
 }
 
 model Profile {
@@ -56,4 +60,29 @@ model Notification {
   message String
   read    Boolean @default(false)
   user    User    @relation(fields: [userId], references: [id])
+}
+
+model AuthToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  type      String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model ActionLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @db.Uuid
+  method    String
+  path      String
+  status    Int
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
 }
