@@ -4,5 +4,6 @@ node_modules/
 
 /src/generated/prisma
 
-# Lab report templates (downloaded, not versioned)
+# Lab report, templates and tasks (downloaded, not versioned)
 /reports/templates/
+lab_tasks/
