@@ -11,6 +11,7 @@ npm test         # starts test DB (docker), applies migrations, runs tests
 ```
 Only the DB needed by the command is started. `npm test` stops the test DB when it passes; `npm run db:stop` stops all DB containers. `npm run dev` is `start` with auto-restart.
 The test DB has no volume, so its data is discarded when its container is recreated.
+To create the first admin, register a user via `/auth/register`, then run `npm run make-admin -- <email>`.
 
 After changing `prisma/schema.prisma`, create a migration with `npx prisma migrate dev --name <change>`; `npm start` and `npm test` apply pending migrations (`prisma migrate deploy`) to their DB.
 

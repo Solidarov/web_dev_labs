@@ -1,7 +1,7 @@
 const { z } = require('zod');
 
 const base = z.object({
-  userId: z.uuid(),
+  userId: z.uuid().optional(),
   resourceId: z.uuid(),
   startTime: z.coerce.date(),
   endTime: z.coerce.date(),

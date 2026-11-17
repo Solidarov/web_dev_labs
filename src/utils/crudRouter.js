@@ -2,7 +2,7 @@ const { Router } = require('express');
 const { z } = require('zod');
 const validate = require('./validate');
 
-module.exports = (controller, createSchema, updateSchema) => {
+module.exports = (controller, createSchema, updateSchema, { read = [], write = [] } = {}) => {
   const router = Router();
 
   router.param('id', (req, res, next, id) => {
@@ -10,13 +10,14 @@ module.exports = (controller, createSchema, updateSchema) => {
     next();
   });
 
-  router.post('/', validate(createSchema), controller.create);
-  router.get('/', controller.list);
-  router.get('/:id', controller.get);
-  router.patch('/:id', validate(updateSchema), controller.update);
-  router.delete('/:id', controller.remove);
+  router.post('/', ...write, validate(createSchema), controller.create);
+  router.get('/', ...read, controller.list);
+  router.get('/:id', ...read, controller.get);
+  router.patch('/:id', ...write, validate(updateSchema), controller.update);
+  router.delete('/:id', ...write, controller.remove);
 
   router.schemas = { createSchema, updateSchema };
+  router.guards = { read: read.length > 0, write: write.length > 0 };
 
   return router;
 };

@@ -14,20 +14,29 @@ after(() => prisma.$disconnect());
 
 const unique = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+// Creates a user directly in the DB and returns it with a ready Authorization header
+const makeUser = async (role = 'user') => {
+  const user = await prisma.user.create({
+    data: { email: `${role}-${unique()}@test.com`, name: role, role },
+  });
+  return { user, auth: `Bearer ${signAccessToken(user)}` };
+};
+const makeAdmin = () => makeUser('admin');
+
 test('POST /users creates a user', async () => {
+  const { auth } = await makeAdmin();
   const res = await request(app)
     .post('/users')
+    .set('Authorization', auth)
     .send({ email: `u-${unique()}@test.com`, name: 'Test User' });
   assert.strictEqual(res.status, 201);
   assert.ok(res.body.id);
 });
 
 test('POST /bookings creates a booking', async () => {
-  const user = await prisma.user.create({
-    data: { email: `b-${unique()}@test.com`, name: 'Booker' },
-  });
+  const { user, auth } = await makeUser();
   const resource = await prisma.resource.create({ data: { name: 'Room 1' } });
-  const res = await request(app).post('/bookings').send({
+  const res = await request(app).post('/bookings').set('Authorization', auth).send({
     userId: user.id,
     resourceId: resource.id,
     startTime: '2030-01-01T10:00:00.000Z',
@@ -38,12 +47,14 @@ test('POST /bookings creates a booking', async () => {
 });
 
 test('POST /bookings with missing fields returns 400', async () => {
-  const res = await request(app).post('/bookings').send({});
+  const { auth } = await makeUser();
+  const res = await request(app).post('/bookings').set('Authorization', auth).send({});
   assert.strictEqual(res.status, 400);
 });
 
 test('POST /bookings with endTime before startTime returns 400', async () => {
-  const res = await request(app).post('/bookings').send({
+  const { auth } = await makeUser();
+  const res = await request(app).post('/bookings').set('Authorization', auth).send({
     userId: '00000000-0000-4000-8000-000000000000',
     resourceId: '00000000-0000-4000-8000-000000000000',
     startTime: '2030-01-01T11:00:00.000Z',
@@ -53,26 +64,34 @@ test('POST /bookings with endTime before startTime returns 400', async () => {
 });
 
 test('user CRUD: read, update, delete, duplicate and missing', async () => {
+  const { auth } = await makeAdmin();
+  const as = (req) => req.set('Authorization', auth);
   const email = `c-${unique()}@test.com`;
-  const created = await request(app).post('/users').send({ email, name: 'Crud', bio: 'hi' });
+  const created = await as(request(app).post('/users')).send({ email, name: 'Crud', bio: 'hi' });
   assert.strictEqual(created.status, 201);
   assert.strictEqual(created.body.profile.bio, 'hi');
   const { id } = created.body;
 
-  assert.strictEqual((await request(app).get(`/users/${id}`)).status, 200);
-  const updated = await request(app).patch(`/users/${id}`).send({ name: 'Renamed' });
+  assert.strictEqual((await as(request(app).get(`/users/${id}`))).status, 200);
+  const updated = await as(request(app).patch(`/users/${id}`)).send({ name: 'Renamed' });
   assert.strictEqual(updated.body.name, 'Renamed');
-  assert.strictEqual((await request(app).post('/users').send({ email, name: 'Dup' })).status, 409);
-  assert.strictEqual((await request(app).delete(`/users/${id}`)).status, 204);
-  assert.strictEqual((await request(app).get(`/users/${id}`)).status, 404);
-  assert.strictEqual((await request(app).get('/users/not-a-uuid')).status, 400);
+  const dup = await as(request(app).post('/users')).send({ email, name: 'Dup' });
+  assert.strictEqual(dup.status, 409);
+  assert.strictEqual((await as(request(app).delete(`/users/${id}`))).status, 204);
+  assert.strictEqual((await as(request(app).get(`/users/${id}`))).status, 404);
+  assert.strictEqual((await as(request(app).get('/users/not-a-uuid'))).status, 400);
   assert.strictEqual((await request(app).get('/nope')).status, 404);
 });
 
 test('resource with category: create and list', async () => {
-  const category = await request(app).post('/categories').send({ name: 'Rooms' });
+  const { auth } = await makeAdmin();
+  const category = await request(app)
+    .post('/categories')
+    .set('Authorization', auth)
+    .send({ name: 'Rooms' });
   const resource = await request(app)
     .post('/resources')
+    .set('Authorization', auth)
     .send({ name: 'Room 2', categories: { connect: [{ id: category.body.id }] } });
   assert.strictEqual(resource.status, 201);
   assert.strictEqual(resource.body.categories.length, 1);
@@ -201,4 +220,94 @@ test('GET /docs.json documents auth routes with bearer security', async () => {
   assert.ok(res.body.components.securitySchemes.bearerAuth);
   assert.ok(res.body.paths['/auth/register'].post.requestBody);
   assert.ok(res.body.paths['/auth/me'].get.security);
+});
+
+test('resources: public read, admin-only write', async () => {
+  const { auth: userAuth } = await makeUser();
+  const { auth: adminAuth } = await makeAdmin();
+  const body = { name: 'Guarded room' };
+  const anon = await request(app).post('/resources').send(body);
+  assert.strictEqual(anon.status, 401);
+  const asUser = await request(app).post('/resources').set('Authorization', userAuth).send(body);
+  assert.strictEqual(asUser.status, 403);
+  // Guards run before validation: an invalid body without a token is still 401
+  assert.strictEqual((await request(app).post('/resources').send({})).status, 401);
+  const asAdmin = await request(app).post('/resources').set('Authorization', adminAuth).send(body);
+  assert.strictEqual(asAdmin.status, 201);
+  assert.strictEqual((await request(app).get('/resources')).status, 200);
+  assert.strictEqual((await request(app).get(`/resources/${asAdmin.body.id}`)).status, 200);
+});
+
+test('users: admin only', async () => {
+  const { auth: userAuth } = await makeUser();
+  const { auth: adminAuth } = await makeAdmin();
+  assert.strictEqual((await request(app).get('/users')).status, 401);
+  assert.strictEqual((await request(app).get('/users').set('Authorization', userAuth)).status, 403);
+  assert.strictEqual(
+    (await request(app).get('/users').set('Authorization', adminAuth)).status,
+    200,
+  );
+});
+
+test('bookings: owner-scoped for users, full access for admins', async () => {
+  const a = await makeUser();
+  const b = await makeUser();
+  const admin = await makeAdmin();
+  const resource = await prisma.resource.create({ data: { name: 'Room 3' } });
+  const book = (who, extra = {}) =>
+    request(app)
+      .post('/bookings')
+      .set('Authorization', who.auth)
+      .send({
+        resourceId: resource.id,
+        startTime: '2030-02-01T10:00:00.000Z',
+        endTime: '2030-02-01T11:00:00.000Z',
+        ...extra,
+      });
+
+  assert.strictEqual((await request(app).get('/bookings')).status, 401);
+
+  // userId comes from the token, even if another one is sent
+  const own = await book(a, { userId: b.user.id });
+  assert.strictEqual(own.status, 201);
+  assert.strictEqual(own.body.userId, a.user.id);
+  const other = await book(b);
+  const otherUrl = `/bookings/${other.body.id}`;
+
+  // A cannot see or change B's booking: 404, not 403
+  const asA = (req) => req.set('Authorization', a.auth);
+  assert.strictEqual((await asA(request(app).get(otherUrl))).status, 404);
+  const patch = await asA(request(app).patch(otherUrl)).send({ endTime: '2030-02-01T12:00:00Z' });
+  assert.strictEqual(patch.status, 404);
+  assert.strictEqual((await asA(request(app).delete(otherUrl))).status, 404);
+
+  const list = await asA(request(app).get('/bookings'));
+  assert.strictEqual(list.status, 200);
+  assert.ok(list.body.length > 0);
+  assert.ok(list.body.every((x) => x.userId === a.user.id));
+
+  // A cannot reassign their own booking to B
+  const moved = await asA(request(app).patch(`/bookings/${own.body.id}`)).send({
+    userId: b.user.id,
+  });
+  assert.strictEqual(moved.status, 200);
+  assert.strictEqual(moved.body.userId, a.user.id);
+
+  // Admin sees everything and may book for another user
+  const asAdmin = (req) => req.set('Authorization', admin.auth);
+  assert.strictEqual((await asAdmin(request(app).get(otherUrl))).status, 200);
+  const all = await asAdmin(request(app).get('/bookings'));
+  assert.ok(all.body.some((x) => x.id === other.body.id));
+  const forB = await book(admin, { userId: b.user.id });
+  assert.strictEqual(forB.body.userId, b.user.id);
+  assert.strictEqual((await book(admin)).body.userId, admin.user.id);
+  assert.strictEqual((await asAdmin(request(app).delete(otherUrl))).status, 204);
+});
+
+test('GET /docs.json marks guarded crud routes with bearer security', async () => {
+  const { paths } = (await request(app).get('/docs.json')).body;
+  assert.ok(paths['/resources'].post.security);
+  assert.ok(paths['/resources'].post.responses[403]);
+  assert.strictEqual(paths['/resources'].get.security, undefined);
+  assert.ok(paths['/users/{id}'].get.security);
 });

@@ -1,5 +1,11 @@
 const crudRouter = require('../utils/crudRouter');
 const controller = require('../controllers/userController');
 const { createUser, updateUser } = require('../models/user');
+const { authenticate, authorize } = require('../utils/auth');
 
-module.exports = crudRouter(controller, createUser, updateUser);
+const adminOnly = [authenticate, authorize('admin')];
+
+module.exports = crudRouter(controller, createUser, updateUser, {
+  read: adminOnly,
+  write: adminOnly,
+});

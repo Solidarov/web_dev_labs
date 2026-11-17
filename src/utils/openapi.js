@@ -28,6 +28,7 @@ const idParam = {
 const errors = {
   400: { description: 'Validation failed, invalid id or related record does not exist' },
   401: { description: 'Unauthorized or invalid credentials' },
+  403: { description: 'Forbidden' },
   404: { description: 'Not found' },
   409: { description: 'Already exists' },
   500: { description: 'Internal server error' },
@@ -41,39 +42,47 @@ module.exports = (resources) => {
   for (const [name, router] of Object.entries(resources)) {
     const { createSchema, updateSchema } = router.schemas;
     const tags = [name];
+    const secure = (guarded, op) =>
+      guarded
+        ? {
+            ...op,
+            security: [{ bearerAuth: [] }],
+            responses: { ...op.responses, ...pick(401, 403) },
+          }
+        : op;
 
     paths[`/${name}`] = {
-      post: {
+      post: secure(router.guards.write, {
         tags,
         summary: `Create ${name} item`,
         requestBody: body(createSchema),
         responses: { 201: { description: 'Created' }, ...pick(400, 409, 500) },
-      },
-      get: {
+      }),
+      get: secure(router.guards.read, {
         tags,
         summary: `List ${name}`,
         responses: { 200: { description: 'OK' }, ...pick(500) },
-      },
+      }),
     };
 
     paths[`/${name}/{id}`] = {
       parameters: [idParam],
-      get: {
+      get: secure(router.guards.read, {
         tags,
         summary: `Get ${name} item`,
         responses: { 200: { description: 'OK' }, ...pick(400, 404, 500) },
-      },
-      patch: {
+      }),
+      patch: secure(router.guards.write, {
         tags,
         summary: `Update ${name} item`,
         requestBody: body(updateSchema),
         responses: { 200: { description: 'OK' }, ...pick(400, 404, 409, 500) },
-      },
-      delete: {
+      }),
+      delete: secure(router.guards.write, {
         tags,
         summary: `Delete ${name} item`,
         responses: { 204: { description: 'Deleted' }, ...pick(400, 404, 500) },
-      },
+      }),
     };
   }
 
