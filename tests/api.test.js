@@ -1,9 +1,17 @@
 require('dotenv/config');
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 process.env.JWT_SECRET ??= 'test-secret';
+// Uploads go to a temp dir, and a tiny size limit makes the 413 case cheap to test
+process.env.UPLOAD_DIR = require('node:path').join(
+  require('node:os').tmpdir(),
+  'booking-test-uploads',
+);
+process.env.MAX_FILE_SIZE = '1024';
 
 const { test, after } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const request = require('supertest');
 const express = require('express');
 const app = require('../src/app');
@@ -416,4 +424,85 @@ test('GET /docs.json documents list query parameters', async () => {
     'email',
   ]);
   assert.ok(paths['/users'].get.responses[400]);
+});
+
+test('booking attachments: upload, download, replace, delete, guards', async () => {
+  const owner = await makeUser();
+  const stranger = await makeUser();
+  const resource = await prisma.resource.create({ data: { name: 'Room 6' } });
+  const booking = await request(app)
+    .post('/bookings')
+    .set('Authorization', owner.auth)
+    .send({
+      resourceId: resource.id,
+      startTime: '2032-01-01T10:00:00.000Z',
+      endTime: '2032-01-01T11:00:00.000Z',
+      attachments: [{ id: 'x', filename: '../../.env' }],
+    });
+  assert.strictEqual(booking.status, 201);
+  // Client-supplied attachment metadata is ignored
+  assert.strictEqual(booking.body.attachments, null);
+
+  const url = `/bookings/${booking.body.id}/attachments`;
+  const as = (who, req) => req.set('Authorization', who.auth);
+  const png = (name = 'a.png') => ({ filename: name, contentType: 'image/png' });
+
+  const uploaded = await as(owner, request(app).post(url))
+    .attach('files', Buffer.from('first'), png('a.PNG'))
+    .attach('files', Buffer.from('%PDF-1'), { filename: 'b.pdf', contentType: 'application/pdf' });
+  assert.strictEqual(uploaded.status, 201);
+  assert.strictEqual(uploaded.body.length, 2);
+  const [first] = uploaded.body;
+  assert.strictEqual(first.originalName, 'a.PNG');
+  assert.match(first.filename, /^[0-9a-f-]{36}\.png$/);
+  const fileUrl = `${url}/${first.id}`;
+
+  const download = await as(owner, request(app).get(fileUrl)).buffer();
+  assert.strictEqual(download.status, 200);
+  assert.strictEqual(download.body.toString(), 'first');
+
+  const replaced = await as(owner, request(app).patch(fileUrl)).attach(
+    'file',
+    Buffer.from('second'),
+    png(),
+  );
+  assert.strictEqual(replaced.status, 200);
+  assert.strictEqual(replaced.body.id, first.id);
+  assert.ok(!fs.existsSync(path.join(process.env.UPLOAD_DIR, first.filename)));
+  const again = await as(owner, request(app).get(fileUrl)).buffer();
+  assert.strictEqual(again.body.toString(), 'second');
+
+  // Errors: wrong type, too large, no files, foreign booking, no token, bad fileId
+  const text = await as(owner, request(app).post(url)).attach('files', Buffer.from('hi'), {
+    filename: 'a.txt',
+    contentType: 'text/plain',
+  });
+  assert.strictEqual(text.status, 400);
+  assert.deepStrictEqual(text.body, { error: 'Unsupported file type' });
+  const big = await as(owner, request(app).post(url)).attach('files', Buffer.alloc(2048), png());
+  assert.strictEqual(big.status, 413);
+  assert.deepStrictEqual(big.body, { error: 'File too large' });
+  assert.strictEqual((await as(owner, request(app).post(url))).status, 400);
+  const foreign = await as(stranger, request(app).post(url)).attach(
+    'files',
+    Buffer.from('x'),
+    png(),
+  );
+  assert.strictEqual(foreign.status, 404);
+  assert.strictEqual((await as(stranger, request(app).get(fileUrl))).status, 404);
+  assert.strictEqual((await request(app).get(fileUrl)).status, 401);
+  assert.strictEqual((await as(owner, request(app).get(`${url}/nope`))).status, 400);
+
+  assert.strictEqual((await as(owner, request(app).delete(fileUrl))).status, 204);
+  assert.strictEqual((await as(owner, request(app).get(fileUrl))).status, 404);
+  const left = await prisma.booking.findUnique({ where: { id: booking.body.id } });
+  assert.strictEqual(left.attachments.length, 1);
+});
+
+test('GET /docs.json documents attachment routes', async () => {
+  const { paths } = (await request(app).get('/docs.json')).body;
+  const upload = paths['/bookings/{id}/attachments'].post;
+  assert.ok(upload.security && upload.responses[413]);
+  assert.ok(upload.requestBody.content['multipart/form-data']);
+  assert.ok(paths['/bookings/{id}/attachments/{fileId}'].delete);
 });

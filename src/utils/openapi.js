@@ -31,6 +31,7 @@ const errors = {
   403: { description: 'Forbidden' },
   404: { description: 'Not found' },
   409: { description: 'Already exists' },
+  413: { description: 'File too large' },
   500: { description: 'Internal server error' },
 };
 
@@ -162,6 +163,43 @@ module.exports = (resources) => {
       { 200: { description: 'Password changed' }, ...pick(401, 404) },
       true,
     ),
+  };
+
+  const binary = { type: 'string', format: 'binary' };
+  const multipart = (properties) => ({
+    required: true,
+    content: { 'multipart/form-data': { schema: { type: 'object', properties } } },
+  });
+  const attachment = (summary, codes, requestBody) => ({
+    tags: ['bookings'],
+    summary,
+    security: [{ bearerAuth: [] }],
+    ...(requestBody && { requestBody }),
+    responses: { ...codes, ...pick(400, 401, 404, 500) },
+  });
+
+  paths['/bookings/{id}/attachments'] = {
+    parameters: [idParam],
+    post: attachment(
+      'Upload attachments (jpeg, png, webp, pdf; up to 5 files)',
+      { 201: { description: 'Created, returns the attachments array' }, ...pick(413) },
+      multipart({ files: { type: 'array', items: binary } }),
+    ),
+  };
+  paths['/bookings/{id}/attachments/{fileId}'] = {
+    parameters: [idParam, { ...idParam, name: 'fileId' }],
+    get: attachment('Download attachment', {
+      200: {
+        description: 'File content',
+        content: { 'application/octet-stream': { schema: binary } },
+      },
+    }),
+    patch: attachment(
+      'Replace attachment file',
+      { 200: { description: 'OK, returns the updated attachment' }, ...pick(413) },
+      multipart({ file: binary }),
+    ),
+    delete: attachment('Delete attachment', { 204: { description: 'Deleted' } }),
   };
 
   return {

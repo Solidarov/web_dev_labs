@@ -5,7 +5,6 @@ const base = z.object({
   resourceId: z.uuid(),
   startTime: z.coerce.date(),
   endTime: z.coerce.date(),
-  attachments: z.any().optional(),
 });
 
 const timesValid = (b) => !b.startTime || !b.endTime || b.endTime > b.startTime;
