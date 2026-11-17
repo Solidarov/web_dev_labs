@@ -34,6 +34,42 @@ const errors = {
   500: { description: 'Internal server error' },
 };
 
+const queryParam = (name, schema, description) => ({ name, in: 'query', schema, description });
+
+const listParams = ({ search, sort, filters }) => [
+  queryParam('page', { type: 'integer', minimum: 1, default: 1 }),
+  queryParam('limit', { type: 'integer', minimum: 1, maximum: 100, default: 10 }),
+  queryParam('sort', { type: 'string', enum: sort, default: sort[0] }),
+  queryParam('order', { type: 'string', enum: ['asc', 'desc'], default: 'asc' }),
+  ...(search.length
+    ? [queryParam('q', { type: 'string' }, `Case-insensitive search in ${search.join(', ')}`)]
+    : []),
+  ...filters.map((name) => queryParam(name, { type: 'string' }, 'Filter')),
+];
+
+const listResponse = {
+  description: 'OK, returns { data, meta }',
+  content: {
+    'application/json': {
+      schema: {
+        type: 'object',
+        properties: {
+          data: { type: 'array', items: { type: 'object' } },
+          meta: {
+            type: 'object',
+            properties: {
+              page: { type: 'integer' },
+              limit: { type: 'integer' },
+              total: { type: 'integer' },
+              totalPages: { type: 'integer' },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
 const pick = (...codes) => Object.fromEntries(codes.map((c) => [c, errors[c]]));
 
 module.exports = (resources) => {
@@ -61,7 +97,8 @@ module.exports = (resources) => {
       get: secure(router.guards.read, {
         tags,
         summary: `List ${name}`,
-        responses: { 200: { description: 'OK' }, ...pick(500) },
+        parameters: listParams(router.listOptions),
+        responses: { 200: listResponse, 400: { description: 'Invalid query' }, ...pick(500) },
       }),
     };
 

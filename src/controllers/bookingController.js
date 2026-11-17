@@ -1,12 +1,21 @@
+const { z } = require('zod');
 const prisma = require('../utils/prisma');
 const crud = require('../utils/crud');
 const eventBus = require('../utils/eventBus');
 
 const isAdmin = (req) => req.user.role === 'admin';
 
-const controller = crud('booking', undefined, (req) =>
-  isAdmin(req) ? {} : { userId: req.user.id },
-);
+// userId filter is AND-ed with the scope, so non-admins still only see their own bookings
+const controller = crud('booking', undefined, {
+  scope: (req) => (isAdmin(req) ? {} : { userId: req.user.id }),
+  sort: ['startTime', 'endTime'],
+  filters: {
+    resourceId: (id) => ({ resourceId: z.uuid().parse(id) }),
+    userId: (id) => ({ userId: z.uuid().parse(id) }),
+    from: (from) => ({ startTime: { gte: z.coerce.date().parse(from) } }),
+    to: (to) => ({ endTime: { lte: z.coerce.date().parse(to) } }),
+  },
+});
 
 const crudUpdate = controller.update;
 

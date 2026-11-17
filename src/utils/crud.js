@@ -1,6 +1,13 @@
+const { z } = require('zod');
 const prisma = require('./prisma');
 
-module.exports = (model, include, scope = () => ({})) => ({
+// filters: { queryParam: (value) => whereFragment }; a filter may throw a ZodError for bad input
+module.exports = (
+  model,
+  include,
+  { scope = () => ({}), search = [], sort = ['id'], filters = {} } = {},
+) => ({
+  listOptions: { search, sort, filters: Object.keys(filters) },
   create: async (req, res, next) => {
     try {
       res.status(201).json(await prisma[model].create({ data: req.body, include }));
@@ -10,8 +17,36 @@ module.exports = (model, include, scope = () => ({})) => ({
   },
   list: async (req, res, next) => {
     try {
-      res.json(await prisma[model].findMany({ where: scope(req), include }));
+      const { query } = req;
+      const page = Math.max(1, parseInt(query.page) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 10));
+      const field = z.enum(sort).default(sort[0]).parse(query.sort);
+      const order = z.enum(['asc', 'desc']).default('asc').parse(query.order);
+      const q = z.string().optional().parse(query.q);
+      const where = {
+        AND: [
+          scope(req),
+          q && search.length
+            ? { OR: search.map((f) => ({ [f]: { contains: q, mode: 'insensitive' } })) }
+            : {},
+          ...Object.entries(filters)
+            .filter(([key]) => query[key] !== undefined)
+            .map(([key, filter]) => filter(query[key])),
+        ],
+      };
+      const [data, total] = await prisma.$transaction([
+        prisma[model].findMany({
+          where,
+          include,
+          orderBy: [{ [field]: order }, { id: order }],
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        prisma[model].count({ where }),
+      ]);
+      res.json({ data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } });
     } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ error: 'Invalid query' });
       next(err);
     }
   },

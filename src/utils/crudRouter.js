@@ -18,6 +18,7 @@ module.exports = (controller, createSchema, updateSchema, { read = [], write = [
 
   router.schemas = { createSchema, updateSchema };
   router.guards = { read: read.length > 0, write: write.length > 0 };
+  router.listOptions = controller.listOptions;
 
   return router;
 };

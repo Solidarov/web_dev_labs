@@ -283,8 +283,8 @@ test('bookings: owner-scoped for users, full access for admins', async () => {
 
   const list = await asA(request(app).get('/bookings'));
   assert.strictEqual(list.status, 200);
-  assert.ok(list.body.length > 0);
-  assert.ok(list.body.every((x) => x.userId === a.user.id));
+  assert.ok(list.body.data.length > 0);
+  assert.ok(list.body.data.every((x) => x.userId === a.user.id));
 
   // A cannot reassign their own booking to B
   const moved = await asA(request(app).patch(`/bookings/${own.body.id}`)).send({
@@ -296,8 +296,8 @@ test('bookings: owner-scoped for users, full access for admins', async () => {
   // Admin sees everything and may book for another user
   const asAdmin = (req) => req.set('Authorization', admin.auth);
   assert.strictEqual((await asAdmin(request(app).get(otherUrl))).status, 200);
-  const all = await asAdmin(request(app).get('/bookings'));
-  assert.ok(all.body.some((x) => x.id === other.body.id));
+  const all = await asAdmin(request(app).get(`/bookings?userId=${b.user.id}`));
+  assert.ok(all.body.data.some((x) => x.id === other.body.id));
   const forB = await book(admin, { userId: b.user.id });
   assert.strictEqual(forB.body.userId, b.user.id);
   assert.strictEqual((await book(admin)).body.userId, admin.user.id);
@@ -310,4 +310,110 @@ test('GET /docs.json marks guarded crud routes with bearer security', async () =
   assert.ok(paths['/resources'].post.responses[403]);
   assert.strictEqual(paths['/resources'].get.security, undefined);
   assert.ok(paths['/users/{id}'].get.security);
+});
+
+test('list: pagination, search, sorting and limit clamp', async () => {
+  const prefix = `cat-${unique()}`;
+  for (const suffix of ['a', 'b', 'c'])
+    await prisma.category.create({ data: { name: `${prefix}-${suffix}` } });
+  const list = (qs) => request(app).get(`/categories?q=${prefix.toUpperCase()}&${qs}`);
+
+  const page1 = await list('limit=2&page=1');
+  assert.strictEqual(page1.status, 200);
+  assert.strictEqual(page1.body.data.length, 2);
+  assert.deepStrictEqual(page1.body.meta, { page: 1, limit: 2, total: 3, totalPages: 2 });
+  const page2 = await list('limit=2&page=2');
+  assert.strictEqual(page2.body.data.length, 1);
+
+  const desc = await list('sort=name&order=desc');
+  assert.deepStrictEqual(
+    desc.body.data.map((x) => x.name),
+    ['c', 'b', 'a'].map((x) => `${prefix}-${x}`),
+  );
+  assert.strictEqual((await list('limit=1000')).body.meta.limit, 100);
+  assert.strictEqual((await list('page=abc')).body.meta.page, 1);
+
+  const badSort = await request(app).get('/categories?sort=id; drop');
+  assert.strictEqual(badSort.status, 400);
+  assert.deepStrictEqual(badSort.body, { error: 'Invalid query' });
+  assert.strictEqual((await request(app).get('/categories?order=up')).status, 400);
+});
+
+test('list filters: user role, resource categoryId', async () => {
+  const admin = await makeAdmin();
+  const users = (qs) =>
+    request(app).get(`/users?q=${admin.user.email}&${qs}`).set('Authorization', admin.auth);
+  assert.strictEqual((await users('role=admin')).body.meta.total, 1);
+  assert.strictEqual((await users('role=user')).body.meta.total, 0);
+
+  const category = await prisma.category.create({ data: { name: `cat-${unique()}` } });
+  const inCategory = await prisma.resource.create({
+    data: { name: 'Filtered', categories: { connect: [{ id: category.id }] } },
+  });
+  await prisma.resource.create({ data: { name: 'Filtered' } });
+  const res = await request(app).get(`/resources?categoryId=${category.id}`);
+  assert.strictEqual(res.status, 200);
+  assert.deepStrictEqual(
+    res.body.data.map((x) => x.id),
+    [inCategory.id],
+  );
+  assert.strictEqual((await request(app).get('/resources?categoryId=nope')).status, 400);
+});
+
+test('list filters: bookings by resource and time, scoped for non-admins', async () => {
+  const a = await makeUser();
+  const b = await makeUser();
+  const admin = await makeAdmin();
+  const resource = await prisma.resource.create({ data: { name: 'Room 4' } });
+  const other = await prisma.resource.create({ data: { name: 'Room 5' } });
+  const book = (resourceId, day) =>
+    prisma.booking.create({
+      data: {
+        userId: a.user.id,
+        resourceId,
+        startTime: new Date(`2031-01-0${day}T10:00:00Z`),
+        endTime: new Date(`2031-01-0${day}T11:00:00Z`),
+      },
+    });
+  const first = await book(resource.id, 1);
+  const second = await book(resource.id, 2);
+  await book(other.id, 1);
+  const get = (who, qs) => request(app).get(`/bookings?${qs}`).set('Authorization', who.auth);
+  const ids = async (who, qs) => (await get(who, qs)).body.data.map((x) => x.id);
+
+  const r = `resourceId=${resource.id}`;
+  assert.deepStrictEqual(await ids(admin, r), [first.id, second.id]);
+  assert.deepStrictEqual(await ids(admin, `${r}&order=desc`), [second.id, first.id]);
+  assert.deepStrictEqual(await ids(admin, `${r}&from=2031-01-02T00:00:00Z`), [second.id]);
+  assert.deepStrictEqual(await ids(a, `${r}&to=2031-01-01T12:00:00Z`), [first.id]);
+
+  // The userId filter cannot widen a non-admin's scope
+  assert.deepStrictEqual(await ids(b, `userId=${a.user.id}`), []);
+
+  const bad = await get(admin, 'resourceId=not-a-uuid');
+  assert.strictEqual(bad.status, 400);
+  assert.deepStrictEqual(bad.body, { error: 'Invalid query' });
+  assert.strictEqual((await get(admin, 'from=garbage')).status, 400);
+});
+
+test('GET /docs.json documents list query parameters', async () => {
+  const { paths } = (await request(app).get('/docs.json')).body;
+  const names = (path) => paths[path].get.parameters.map((p) => p.name);
+  assert.deepStrictEqual(names('/bookings'), [
+    'page',
+    'limit',
+    'sort',
+    'order',
+    'resourceId',
+    'userId',
+    'from',
+    'to',
+  ]);
+  assert.ok(names('/categories').includes('q'));
+  assert.deepStrictEqual(paths['/users'].get.parameters[2].schema.enum, [
+    'createdAt',
+    'name',
+    'email',
+  ]);
+  assert.ok(paths['/users'].get.responses[400]);
 });
