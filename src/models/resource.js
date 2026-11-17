@@ -8,5 +8,11 @@ const base = z.object({
   categories: connect,
 });
 
-exports.createResource = base;
-exports.updateResource = base.partial();
+exports.createResource = base.meta({
+  example: {
+    name: 'Room 101',
+    description: 'Meeting room for 8 people with a projector',
+    categories: { connect: [{ id: 'b2e8d6f4-1c3a-4f5e-8d7b-9a0c1e2f3d4b' }] },
+  },
+});
+exports.updateResource = base.partial().meta({ example: { description: 'Projector replaced' } });

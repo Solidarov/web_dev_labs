@@ -659,3 +659,22 @@ test('GET /docs.json documents the password reset routes', async () => {
   assert.ok(paths['/auth/forgot-password'].post.responses[429]);
   assert.ok(paths['/auth/reset-password'].post.requestBody);
 });
+
+test('GET /docs.json has examples and the shared Error schema on every operation', async () => {
+  const { components, paths } = (await request(app).get('/docs.json')).body;
+  assert.ok(components.schemas.Error.properties.error);
+  for (const [path, ops] of Object.entries(paths))
+    for (const [method, op] of Object.entries(ops)) {
+      if (!op.responses) continue; // path-level parameters
+      const where = `${method} ${path}`;
+      const body = op.requestBody?.content['application/json'];
+      if (body) assert.ok(body.schema.example, `request example: ${where}`);
+      for (const [code, res] of Object.entries(op.responses)) {
+        const json = res.content?.['application/json'];
+        if (code >= 400) {
+          assert.strictEqual(json.schema.$ref, '#/components/schemas/Error', `${code} ${where}`);
+          assert.ok(json.example || json.examples, `${code} example: ${where}`);
+        } else if (json) assert.ok(json.example, `${code} example: ${where}`);
+      }
+    }
+});
