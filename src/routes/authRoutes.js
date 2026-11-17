@@ -11,6 +11,18 @@ router.post('/register', authLimiter, validate(schemas.register), controller.reg
 router.post('/login', authLimiter, validate(schemas.login), controller.login);
 router.post('/refresh', validate(schemas.refresh), controller.refresh);
 router.post('/logout', validate(schemas.refresh), controller.logout);
+router.post(
+  '/forgot-password',
+  authLimiter,
+  validate(schemas.forgotPassword),
+  controller.forgotPassword,
+);
+router.post(
+  '/reset-password',
+  authLimiter,
+  validate(schemas.resetPassword),
+  controller.resetPassword,
+);
 router.get('/me', authenticate, controller.me);
 router.patch(
   '/password',

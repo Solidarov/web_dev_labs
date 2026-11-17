@@ -11,6 +11,8 @@ process.env.MAX_FILE_SIZE = '1024';
 process.env.RATE_LIMIT = '10000';
 process.env.AUTH_RATE_LIMIT = '10000';
 process.env.CORS_ORIGIN ??= 'http://localhost:5173';
+// Never send real email: an empty SMTP_HOST makes the mailer use nodemailer's jsonTransport
+process.env.SMTP_HOST = '';
 
 const { test, after } = require('node:test');
 const assert = require('node:assert');
@@ -22,6 +24,8 @@ const app = require('../src/app');
 const prisma = require('../src/utils/prisma');
 const { authenticate, authorize, signAccessToken } = require('../src/utils/auth');
 const { limiter } = require('../src/utils/rateLimit');
+const eventBus = require('../src/utils/eventBus');
+const { sendResetEmail } = require('../src/utils/mailer');
 
 after(() => prisma.$disconnect());
 
@@ -579,4 +583,79 @@ test('Swagger UI is served at /docs and /api-docs, /logs is documented', async (
   assert.match(ui.text, /swagger-ui/);
   const { paths } = (await request(app).get('/docs.json')).body;
   assert.ok(paths['/logs'].get.security && paths['/logs'].get.responses[403]);
+});
+
+// Sends forgot-password and returns the response plus the token emitted for that email (if any)
+const forgot = async (email) => {
+  let token;
+  const listener = (e) => e.email === email && (token = e.token);
+  eventBus.on('passwordResetRequested', listener);
+  const res = await request(app).post('/auth/forgot-password').send({ email });
+  eventBus.off('passwordResetRequested', listener);
+  return { res, token };
+};
+
+test('POST /auth/forgot-password answers 202 for any email, emits only for known users', async () => {
+  const message = { message: 'If the email exists, a reset link has been sent' };
+  const unknown = await forgot(`nobody-${unique()}@test.com`);
+  assert.strictEqual(unknown.res.status, 202);
+  assert.deepStrictEqual(unknown.res.body, message);
+  assert.strictEqual(unknown.token, undefined);
+
+  const email = (await register()).body.user.email;
+  const known = await forgot(email);
+  assert.strictEqual(known.res.status, 202);
+  assert.deepStrictEqual(known.res.body, message);
+  assert.ok(known.token);
+
+  assert.strictEqual((await forgot('not-an-email')).res.status, 400);
+});
+
+test('POST /auth/reset-password sets a new password once and revokes refresh tokens', async () => {
+  const { user, refreshToken } = (await register()).body;
+  const first = (await forgot(user.email)).token;
+  const { token } = await forgot(user.email);
+  const reset = (t, password = 'newpassword1') =>
+    request(app).post('/auth/reset-password').send({ token: t, password });
+  const invalid = { error: 'Invalid or expired token' };
+
+  // A newer request invalidates the previous token
+  const old = await reset(first);
+  assert.strictEqual(old.status, 400);
+  assert.deepStrictEqual(old.body, invalid);
+  assert.strictEqual((await reset(token, 'short')).status, 400);
+
+  const ok = await reset(token);
+  assert.strictEqual(ok.status, 200);
+  assert.deepStrictEqual(ok.body, { message: 'Password has been reset' });
+
+  const login = (password) =>
+    request(app).post('/auth/login').send({ email: user.email, password });
+  assert.strictEqual((await login('newpassword1')).status, 200);
+  assert.strictEqual((await login('password123')).status, 401);
+  assert.strictEqual((await request(app).post('/auth/refresh').send({ refreshToken })).status, 401);
+
+  assert.deepStrictEqual((await reset(token)).body, invalid);
+  assert.strictEqual((await reset('garbage')).status, 400);
+  // A refresh token is not accepted as a reset token
+  const other = (await register()).body.refreshToken;
+  assert.strictEqual((await reset(other)).status, 400);
+});
+
+test('mailer renders the reset email locally with the token and link', async () => {
+  const info = await sendResetEmail({ email: 'x@test.com', token: 'tok123' });
+  const mail = JSON.parse(info.message);
+  assert.deepStrictEqual(
+    mail.to.map((t) => t.address),
+    ['x@test.com'],
+  );
+  assert.match(mail.text, /tok123/);
+  assert.match(mail.html, /reset-password\?token=tok123/);
+});
+
+test('GET /docs.json documents the password reset routes', async () => {
+  const { paths } = (await request(app).get('/docs.json')).body;
+  assert.ok(paths['/auth/forgot-password'].post.responses[202]);
+  assert.ok(paths['/auth/forgot-password'].post.responses[429]);
+  assert.ok(paths['/auth/reset-password'].post.requestBody);
 });

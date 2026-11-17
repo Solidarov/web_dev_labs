@@ -13,19 +13,17 @@ const signAccessToken = (user) =>
     expiresIn: process.env.JWT_EXPIRES_IN || '15m',
   });
 
-const createRefreshToken = async (userId) => {
+// Random token for the client; only its hash is stored
+const createToken = async (userId, type, ttlMs) => {
   const token = crypto.randomBytes(32).toString('hex');
-  const days = Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS) || 7;
   await prisma.authToken.create({
-    data: {
-      userId,
-      type: 'refresh',
-      tokenHash: hashToken(token),
-      expiresAt: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
-    },
+    data: { userId, type, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + ttlMs) },
   });
   return token;
 };
+
+const createRefreshToken = (userId) =>
+  createToken(userId, 'refresh', (Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS) || 7) * 86400000);
 
 const issueTokens = async (user) => ({
   accessToken: signAccessToken(user),
@@ -56,6 +54,7 @@ module.exports = {
   verifyPassword,
   hashToken,
   signAccessToken,
+  createToken,
   createRefreshToken,
   issueTokens,
   authenticate,

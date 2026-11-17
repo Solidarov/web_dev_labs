@@ -14,6 +14,7 @@ const errorHandler = require('./utils/errorHandler');
 const prisma = require('./utils/prisma');
 const { globalLimiter } = require('./utils/rateLimit');
 const actionLog = require('./utils/actionLog');
+require('./utils/mailer'); // registers the email listeners on eventBus
 
 const app = express();
 

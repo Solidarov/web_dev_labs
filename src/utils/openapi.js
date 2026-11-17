@@ -33,6 +33,7 @@ const errors = {
   404: { description: 'Not found' },
   409: { description: 'Already exists' },
   413: { description: 'File too large' },
+  429: { description: 'Too many requests' },
   500: { description: 'Internal server error' },
 };
 
@@ -153,6 +154,19 @@ module.exports = (resources) => {
   };
   paths['/auth/logout'] = {
     post: auth('Revoke refresh token', authSchemas.refresh, { 204: { description: 'Logged out' } }),
+  };
+  paths['/auth/forgot-password'] = {
+    post: auth('Request a password reset email', authSchemas.forgotPassword, {
+      202: { description: 'Accepted, same response whether or not the email exists' },
+      ...pick(429),
+    }),
+  };
+  paths['/auth/reset-password'] = {
+    post: auth('Reset password with an emailed token', authSchemas.resetPassword, {
+      200: { description: 'Password has been reset, refresh tokens revoked' },
+      400: { description: 'Validation failed or invalid/expired token' },
+      ...pick(429),
+    }),
   };
   paths['/auth/me'] = {
     get: auth('Get current user', null, { 200: { description: 'OK' }, ...pick(401, 404) }, true),
