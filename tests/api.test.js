@@ -7,6 +7,10 @@ process.env.UPLOAD_DIR = require('node:path').join(
   'booking-test-uploads',
 );
 process.env.MAX_FILE_SIZE = '1024';
+// High limits so the suite never hits 429; the limiter itself is tested on a mini app
+process.env.RATE_LIMIT = '10000';
+process.env.AUTH_RATE_LIMIT = '10000';
+process.env.CORS_ORIGIN ??= 'http://localhost:5173';
 
 const { test, after } = require('node:test');
 const assert = require('node:assert');
@@ -17,6 +21,7 @@ const express = require('express');
 const app = require('../src/app');
 const prisma = require('../src/utils/prisma');
 const { authenticate, authorize, signAccessToken } = require('../src/utils/auth');
+const { limiter } = require('../src/utils/rateLimit');
 
 after(() => prisma.$disconnect());
 
@@ -505,4 +510,73 @@ test('GET /docs.json documents attachment routes', async () => {
   assert.ok(upload.security && upload.responses[413]);
   assert.ok(upload.requestBody.content['multipart/form-data']);
   assert.ok(paths['/bookings/{id}/attachments/{fileId}'].delete);
+});
+
+test('security headers: helmet and CORS for the allowed origin', async () => {
+  const origin = process.env.CORS_ORIGIN;
+  const res = await request(app).get('/resources').set('Origin', origin);
+  assert.strictEqual(res.headers['x-content-type-options'], 'nosniff');
+  assert.ok(res.headers['content-security-policy']);
+  assert.strictEqual(res.headers['access-control-allow-origin'], origin);
+});
+
+test('rate limit: headers on auth routes, 429 with error body over the limit', async () => {
+  const login = await request(app).post('/auth/login').send({});
+  assert.ok(login.headers['ratelimit-policy']);
+  assert.ok(login.headers['ratelimit']);
+
+  const mini = express();
+  mini.use(limiter(1));
+  mini.get('/', (req, res) => res.json({ ok: true }));
+  assert.strictEqual((await request(mini).get('/')).status, 200);
+  const limited = await request(mini).get('/');
+  assert.strictEqual(limited.status, 429);
+  assert.deepStrictEqual(limited.body, { error: 'Too many requests' });
+});
+
+test('action log: write requests are logged, GET /logs is admin only', async () => {
+  const { user, auth } = await makeUser();
+  const admin = await makeAdmin();
+  const resource = await prisma.resource.create({ data: { name: 'Room 7' } });
+  const booking = await request(app).post('/bookings?x=1').set('Authorization', auth).send({
+    resourceId: resource.id,
+    startTime: '2033-01-01T10:00:00.000Z',
+    endTime: '2033-01-01T11:00:00.000Z',
+  });
+  assert.strictEqual(booking.status, 201);
+
+  const logs = (who, qs) => request(app).get(`/logs?${qs}`).set('Authorization', who.auth);
+  // The log is written after the response, so poll briefly
+  let entry;
+  for (let i = 0; i < 20 && !entry; i++) {
+    const res = await logs(admin, `userId=${user.id}&order=desc`);
+    assert.strictEqual(res.status, 200);
+    entry = res.body.data.find((x) => x.method === 'POST' && x.path === '/bookings');
+    if (!entry) await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.ok(entry);
+  assert.strictEqual(entry.status, 201);
+  assert.deepStrictEqual(Object.keys(entry).sort(), [
+    'createdAt',
+    'id',
+    'method',
+    'path',
+    'status',
+    'userId',
+  ]);
+
+  assert.strictEqual((await logs({ auth }, '')).status, 403);
+  assert.strictEqual((await request(app).get('/logs')).status, 401);
+  const bad = await logs(admin, 'userId=nope');
+  assert.strictEqual(bad.status, 400);
+  assert.deepStrictEqual(bad.body, { error: 'Invalid query' });
+});
+
+test('Swagger UI is served at /docs and /api-docs, /logs is documented', async () => {
+  assert.strictEqual((await request(app).get('/docs/')).status, 200);
+  const ui = await request(app).get('/api-docs/');
+  assert.strictEqual(ui.status, 200);
+  assert.match(ui.text, /swagger-ui/);
+  const { paths } = (await request(app).get('/docs.json')).body;
+  assert.ok(paths['/logs'].get.security && paths['/logs'].get.responses[403]);
 });

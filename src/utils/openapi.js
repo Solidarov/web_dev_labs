@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const authSchemas = require('../models/auth');
+const logController = require('../controllers/logController');
 
 const toSchema = (schema) => {
   const { $schema, ...json } = z.toJSONSchema(schema, {
@@ -200,6 +201,20 @@ module.exports = (resources) => {
       multipart({ file: binary }),
     ),
     delete: attachment('Delete attachment', { 204: { description: 'Deleted' } }),
+  };
+
+  paths['/logs'] = {
+    get: {
+      tags: ['logs'],
+      summary: 'List user actions (admin only, write requests)',
+      security: [{ bearerAuth: [] }],
+      parameters: listParams(logController.listOptions),
+      responses: {
+        200: listResponse,
+        400: { description: 'Invalid query' },
+        ...pick(401, 403, 500),
+      },
+    },
   };
 
   return {
